@@ -1,0 +1,61 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    name: PostgreSQL ${{ matrix.pg }}
+    runs-on: ubuntu-latest
+    container: pgxn/pgxn-tools
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [14, 15, 16, 17, 18]
+    steps:
+      - name: Start PostgreSQL ${{ matrix.pg }}
+        run: pg-start ${{ matrix.pg }}
+      - name: Check out repository
+        uses: actions/checkout@v5
+      - name: The full install script matches the upgrade script
+        run: make verify-install-script
+      - name: Build, install and run the regression suite
+        run: pg-build-test
+
+  standalone:
+    name: Standalone encoder tests (no PostgreSQL)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+      - name: Build and run
+        run: |
+          set -euo pipefail
+          enc="postal_code_fmt.c postal_code_us.c postal_code_ca.c postal_code_fr.c postal_code_br.c postal_code_cz.c postal_code_lu.c postal_code_gb.c postal_code_ie.c binfmt.c"
+          cc -std=c99 -DEXTVERSION=test -o test_postal_code test_postal_code.c $enc && ./test_postal_code
+          cc -std=c99 -DEXTVERSION=test -o test_postal_code_range test_postal_code_range.c $enc && ./test_postal_code_range
+          cc -std=c99 -Wall -Wpedantic -D_POSIX_C_SOURCE=200809L -o test_postal_code_pattern test_postal_code_pattern.c postal_code_pattern.c && ./test_postal_code_pattern
+          cc -std=c99 -Wall -Wpedantic -D_POSIX_C_SOURCE=200809L -o test_postal_code_parts test_postal_code_parts.c postal_code_pattern.c && ./test_postal_code_parts
+          cc -std=c99 -DEXTVERSION=test -DTRUE=true -DFALSE=false -o test_parts_gb test_parts_gb.c postal_code_pattern.c $enc && ./test_parts_gb
+          cc -std=c99 -DEXTVERSION=test -DTRUE=true -DFALSE=false -o test_parts_compiled test_parts_compiled.c postal_code_pattern.c $enc && ./test_parts_compiled
+          cc -std=c99 -DEXTVERSION=test -o test_parts_builtin test_parts_builtin.c postal_code_pattern.c && ./test_parts_builtin
+          cc -std=c99 -Wall -Wpedantic -D_POSIX_C_SOURCE=200809L -o test_postal_code_lists test_postal_code_lists.c postal_code_pattern.c && ./test_postal_code_lists
+
+  sanitizers:
+    name: Engine tests under AddressSanitizer and UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+      - name: Build and run
+        run: |
+          set -euo pipefail
+          san="-std=c99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -D_POSIX_C_SOURCE=200809L"
+          for t in lists pattern parts; do
+            cc $san -o san_$t test_postal_code_$t.c postal_code_pattern.c
+            ASAN_OPTIONS=detect_leaks=0 ./san_$t
+          done
